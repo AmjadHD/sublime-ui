@@ -179,7 +179,11 @@ class SelectSyntaxColorSchemeCommand(sublime_plugin.WindowCommand):
     PREFS_FILE = 'Preferences.sublime-settings'
     DEFAULT_CS = 'Packages/Color Scheme - Default/Monokai.tmTheme'
 
-    views = []
+    # A list of info about active views in the current window that have
+    # view-specific color scheme. This ensures the preview process is at
+    # least previewing the color scheme for things the user can see.
+    views = None
+
     # A list of strings containing the package-relative file path of
     # every available color scheme
     schemes = None
@@ -194,7 +198,7 @@ class SelectSyntaxColorSchemeCommand(sublime_plugin.WindowCommand):
     def run(self):
         self.syntax = self.window.active_view().settings().get("syntax")
 
-        self.SYNTAX_PREFS_FILE = os.path.splitext(os.path.basename(self.syntax))[0] + '.sublime-vs'
+        self.SYNTAX_PREFS_FILE = os.path.splitext(os.path.basename(self.syntax))[0] + '.sublime-settings'
 
         prefs = sublime.load_settings(self.PREFS_FILE)
 
@@ -206,6 +210,7 @@ class SelectSyntaxColorSchemeCommand(sublime_plugin.WindowCommand):
 
         show_legacy = prefs.get("show_legacy_color_schemes", False)
 
+        self.views = []
         initial_highlight = -1
         self.schemes = []
         names = []
@@ -226,6 +231,7 @@ class SelectSyntaxColorSchemeCommand(sublime_plugin.WindowCommand):
 
         for cs in files:
             if self.current and cs == self.current:
+                # add 1 to the count because of the added global item below
                 initial_highlight = len(self.schemes) + 1
             if len(cs.split('/', 2)) != 3:  # Not in a package
                 continue
@@ -238,26 +244,28 @@ class SelectSyntaxColorSchemeCommand(sublime_plugin.WindowCommand):
             self.schemes.append(cs)
             names.append([name, pkg])
             package_set.add(pkg)
+
+        # add an option to remove the 'color-scheme' entry from the syntax
+        # settings file so that the global color-scheme is applied
         names.insert(0, ['global', os.path.dirname(self.default_cs[9:])])
+
+        # the specific value inserted is not important as we only need the
+        # index (0)
+        self.schemes.insert(0, self.default_cs)
 
         # Don't show the package name if all color schemes are in the same
         # package
         if len(package_set) == 1:
-            names = [name for name, pkg in names] + ['global']
+            names = ['global'] + [name for name, pkg in names]
 
-        self.schemes.insert(0, self.default_cs)
-
-        if self.views:
-            for vs, _ in self.views:
+        # populate self.views with pairs of view's settings and color-scheme
+        for i in range(self.window.num_groups()):
+            v = self.window.active_view_in_group(i)
+            vs = v.settings()
+            cs = vs.get('color_scheme', None)
+            if vs.get('syntax') == self.syntax and cs:
+                self.views.append((vs, cs))
                 vs.erase('color_scheme')
-        else:
-            for i in range(self.window.num_groups()):
-                v = self.window.active_view_in_group(i)
-                vs = v.settings()
-                cs = vs.get('color_scheme', None)
-                if vs.get('syntax') == self.syntax and cs:
-                    self.views.append([vs, cs])
-                    vs.erase('color_scheme')
 
         self.window.show_quick_panel(
             names,
@@ -273,13 +281,14 @@ class SelectSyntaxColorSchemeCommand(sublime_plugin.WindowCommand):
             Integer of the selected quick panel item
         """
 
-        # Reset view-specific color schemes whether a new global
+        # Reset view-specific color schemes whether a new syntax
         # color scheme was selected or not
         for vs, cs in self.views:
             vs.set('color_scheme', cs)
 
         if index == -1:
             self.syntax_prefs.set('color_scheme', self.current)
+        # if 'global' is chosen, erase the color-scheme entry
         elif index == 0:
             self.syntax_prefs.erase('color_scheme')
         else:
