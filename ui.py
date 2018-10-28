@@ -174,6 +174,134 @@ class SelectColorSchemeCommand(sublime_plugin.WindowCommand):
         return vcs != gcs
 
 
+class SelectSyntaxColorSchemeCommand(sublime_plugin.WindowCommand):
+
+    PREFS_FILE = 'Preferences.sublime-settings'
+    DEFAULT_CS = 'Packages/Color Scheme - Default/Monokai.tmTheme'
+
+    views = []
+    # A list of strings containing the package-relative file path of
+    # every available color scheme
+    schemes = None
+
+    # A sublime.Settings object of the global Sublime Text settings
+    prefs = None
+
+    # The last selected row index - used to debounce the search so we
+    # aren't apply a new color scheme with every keypress
+    last_selected = -1
+
+    def run(self):
+        self.syntax = self.window.active_view().settings().get("syntax")
+
+        self.SYNTAX_PREFS_FILE = os.path.splitext(os.path.basename(self.syntax))[0] + '.sublime-vs'
+
+        prefs = sublime.load_settings(self.PREFS_FILE)
+
+        self.syntax_prefs = sublime.load_settings(self.SYNTAX_PREFS_FILE)
+
+        self.default_cs = prefs.get('color_scheme', self.DEFAULT_CS)
+
+        self.current = self.syntax_prefs.get('color_scheme', self.default_cs)
+
+        show_legacy = prefs.get("show_legacy_color_schemes", False)
+
+        initial_highlight = -1
+        self.schemes = []
+        names = []
+        package_set = set()
+
+        files = sublime.find_resources('*.tmTheme')
+        trimmed_names = set()
+        for f in files:
+            name, ext = os.path.splitext(os.path.basename(f))
+            trimmed_names.add(name)
+
+        # Add all the sublime-color-scheme files, but not the overrides
+        for f in sublime.find_resources('*.sublime-color-scheme'):
+            name, ext = os.path.splitext(os.path.basename(f))
+            if name not in trimmed_names:
+                trimmed_names.add(name)
+                files.append(f)
+
+        for cs in files:
+            if self.current and cs == self.current:
+                initial_highlight = len(self.schemes) + 1
+            if len(cs.split('/', 2)) != 3:  # Not in a package
+                continue
+            pkg = os.path.dirname(cs)
+            if pkg == "Packages/Color Scheme - Legacy" and not show_legacy:
+                continue
+            if pkg.startswith("Packages/"):
+                pkg = pkg[9:]
+            name, ext = os.path.splitext(os.path.basename(cs))
+            self.schemes.append(cs)
+            names.append([name, pkg])
+            package_set.add(pkg)
+        names.insert(0, ['global', os.path.dirname(self.default_cs[9:])])
+
+        # Don't show the package name if all color schemes are in the same
+        # package
+        if len(package_set) == 1:
+            names = [name for name, pkg in names] + ['global']
+
+        self.schemes.insert(0, self.default_cs)
+
+        if self.views:
+            for vs, _ in self.views:
+                vs.erase('color_scheme')
+        else:
+            for i in range(self.window.num_groups()):
+                v = self.window.active_view_in_group(i)
+                vs = v.settings()
+                cs = vs.get('color_scheme', None)
+                if vs.get('syntax') == self.syntax and cs:
+                    self.views.append([vs, cs])
+                    vs.erase('color_scheme')
+
+        self.window.show_quick_panel(
+            names,
+            self.on_done,
+            sublime.KEEP_OPEN_ON_FOCUS_LOST,
+            initial_highlight,
+            self.on_highlighted
+        )
+
+    def on_done(self, index):
+        """
+        :param index:
+            Integer of the selected quick panel item
+        """
+
+        # Reset view-specific color schemes whether a new global
+        # color scheme was selected or not
+        for vs, cs in self.views:
+            vs.set('color_scheme', cs)
+
+        if index == -1:
+            self.syntax_prefs.set('color_scheme', self.current)
+        elif index == 0:
+            self.syntax_prefs.erase('color_scheme')
+        else:
+            self.syntax_prefs.set('color_scheme', self.schemes[index])
+        sublime.save_settings(self.SYNTAX_PREFS_FILE)
+
+    def on_highlighted(self, index):
+        """
+        :param index:
+            Integer of the selected quick panel item
+        """
+
+        self.last_selected = index
+
+        def update_cs():
+            selected = self.schemes[index]
+            if self.current == selected:
+                return
+            self.syntax_prefs.set('color_scheme', selected)
+        sublime.set_timeout(update_cs, 250)
+
+
 class SelectThemeCommand(sublime_plugin.WindowCommand):
 
     PREFS_FILE = 'Preferences.sublime-settings'
